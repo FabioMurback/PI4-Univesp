@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashboard Inteligente do Estúdio</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root{
+      --bg:#f4f7fb;
+      --card:#ffffff;
+      --text:#1f2937;
+      --muted:#6b7280;
+      --ok:#16a34a;
+      --warn:#d97706;
+      --danger:#dc2626;
+      --primary:#2563eb;
+      --border:#e5e7eb;
+    }
+
+    *{
+      box-sizing:border-box;
+    }
+
+    body{
+      margin:0;
+      font-family:Arial, Helvetica, sans-serif;
+      background:var(--bg);
+      color:var(--text);
+    }
+
+    .container{
+      max-width:1280px;
+      margin:0 auto;
+      padding:24px;
+    }
+
+    .header{
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      gap:16px;
+      flex-wrap:wrap;
+      margin-bottom:24px;
+    }
+
+    .title{
+      margin:0;
+      font-size:30px;
+      font-weight:800;
+    }
+
+    .subtitle{
+      margin:6px 0 0;
+      color:var(--muted);
+    }
+
+    .badge-status{
+      padding:10px 16px;
+      border-radius:999px;
+      font-weight:700;
+      color:#fff;
+    }
+
+    .ok{
+      background:var(--ok);
+    }
+
+    .atencao{
+      background:var(--warn);
+    }
+
+    .critico{
+      background:var(--danger);
+    }
+
+    .grid-cards{
+      display:grid;
+      grid-template-columns:repeat(4, 1fr);
+      gap:16px;
+      margin-bottom:24px;
+    }
+
+    .card{
+      background:var(--card);
+      border:1px solid var(--border);
+      border-radius:18px;
+      padding:18px;
+      box-shadow:0 6px 20px rgba(0,0,0,0.05);
+    }
+
+    .card h3{
+      margin:0 0 10px;
+      font-size:15px;
+      color:var(--muted);
+      font-weight:600;
+    }
+
+    .big-number{
+      font-size:32px;
+      font-weight:800;
+      margin:0;
+    }
+
+    .small-info{
+      margin-top:10px;
+      color:var(--muted);
+      font-size:14px;
+    }
+
+    .grid-main{
+      display:grid;
+      grid-template-columns:2fr 1fr;
+      gap:16px;
+      margin-bottom:24px;
+    }
+
+    .charts{
+      display:grid;
+      gap:16px;
+    }
+
+    .alerts{
+      display:grid;
+      gap:16px;
+    }
+
+    .alert-card{
+      border-left:8px solid;
+      padding:16px;
+      border-radius:14px;
+      background:#fff;
+      border:1px solid var(--border);
+      box-shadow:0 6px 20px rgba(0,0,0,0.05);
+    }
+
+    .alert-card.ok{
+      border-left-color:var(--ok);
+    }
+
+    .alert-card.atencao{
+      border-left-color:var(--warn);
+    }
+
+    .alert-card.critico{
+      border-left-color:var(--danger);
+    }
+
+    .alert-title{
+      margin:0 0 8px;
+      font-size:18px;
+      font-weight:700;
+    }
+
+    .alert-message{
+      margin:0;
+      line-height:1.5;
+    }
+
+    table{
+      width:100%;
+      border-collapse:collapse;
+    }
+
+    th, td{
+      padding:12px;
+      border-bottom:1px solid var(--border);
+      text-align:left;
+      font-size:14px;
+    }
+
+    th{
+      color:var(--muted);
+      font-weight:700;
+    }
+
+    .footer-note{
+      margin-top:14px;
+      color:var(--muted);
+      font-size:13px;
+    }
+
+    .status-box{
+      margin-top:10px;
+      font-size:14px;
+      color:var(--muted);
+    }
+
+    @media (max-width: 1024px){
+      .grid-cards{
+        grid-template-columns:repeat(2, 1fr);
+      }
+
+      .grid-main{
+        grid-template-columns:1fr;
+      }
+    }
+
+    @media (max-width: 640px){
+      .grid-cards{
+        grid-template-columns:1fr;
+      }
+
+      .title{
+        font-size:24px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div>
+        <h1 class="title">Dashboard Inteligente do Estúdio</h1>
+        <p class="subtitle">Monitoramento de temperatura, luminosidade e alertas do ambiente.</p>
+      </div>
+      <div id="statusGeral" class="badge-status ok">Status geral: OK</div>
+    </div>
+
+    <div class="grid-cards">
+      <div class="card">
+        <h3>Temperatura atual</h3>
+        <p class="big-number" id="temperaturaAtual">-- °C</p>
+        <div class="small-info">Última leitura recebida</div>
+      </div>
+
+      <div class="card">
+        <h3>Luminosidade atual</h3>
+        <p class="big-number" id="luminosidadeAtual">--</p>
+        <div class="small-info">Valor analógico do sensor</div>
+      </div>
+
+      <div class="card">
+        <h3>Média de temperatura</h3>
+        <p class="big-number" id="mediaTemperatura">-- °C</p>
+        <div class="small-info">Base nas últimas leituras</div>
+      </div>
+
+      <div class="card">
+        <h3>Média de luminosidade</h3>
+        <p class="big-number" id="mediaLuminosidade">--</p>
+        <div class="small-info">Base nas últimas leituras</div>
+      </div>
+    </div>
+
+    <div class="grid-main">
+      <div class="charts">
+        <div class="card">
+          <h3>Evolução da temperatura</h3>
+          <canvas id="graficoTemperatura"></canvas>
+        </div>
+
+        <div class="card">
+          <h3>Evolução da luminosidade</h3>
+          <canvas id="graficoLuminosidade"></canvas>
+        </div>
+      </div>
+
+      <div class="alerts">
+        <div id="alertaTemperatura" class="alert-card ok">
+          <h3 class="alert-title">Temperatura</h3>
+          <p class="alert-message">Aguardando dados...</p>
+        </div>
+
+        <div id="alertaLuminosidade" class="alert-card ok">
+          <h3 class="alert-title">Luminosidade</h3>
+          <p class="alert-message">Aguardando dados...</p>
+        </div>
+
+        <div class="card">
+          <h3>Última atualização</h3>
+          <p class="big-number" id="ultimaAtualizacao" style="font-size:20px;">--</p>
+          <div class="footer-note">Atualização automática a cada 5 segundos.</div>
+          <div class="status-box" id="statusConexao">Carregando dados da API...</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Últimas leituras</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Temperatura (°C)</th>
+            <th>Luminosidade</th>
+            <th>Data/Hora</th>
+          </tr>
+        </thead>
+        <tbody id="tabelaLeituras">
+          <tr>
+            <td colspan="4">Carregando dados...</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    let chartTemp;
+    let chartLum;
+
+    function formatarData(dataStr) {
+      if (!dataStr) return '--';
+      const data = new Date(dataStr);
+      return data.toLocaleString('pt-BR');
+    }
+
+    function formatarHora(dataStr) {
+      if (!dataStr) return '--';
+      const data = new Date(dataStr);
+      return data.toLocaleTimeString('pt-BR');
+    }
+
+    function aplicarClasseNivel(elemento, nivel) {
+      elemento.classList.remove('ok', 'atencao', 'critico');
+      elemento.classList.add(nivel);
+    }
+
+    function criarGraficos() {
+      const ctxTemp = document.getElementById('graficoTemperatura').getContext('2d');
+      const ctxLum = document.getElementById('graficoLuminosidade').getContext('2d');
+
+      chartTemp = new Chart(ctxTemp, {
+        type: 'line',
+        data: {
+          labels: [],
+          datasets: [{
+            label: 'Temperatura (°C)',
+            data: [],
+            borderWidth: 2,
+            tension: 0.25
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          plugins: {
+            legend: {
+              display: true
+            }
+          }
+        }
+      });
+
+      chartLum = new Chart(ctxLum, {
+        type: 'line',
+        data: {
+          labels: [],
+          datasets: [{
+            label: 'Luminosidade',
+            data: [],
+            borderWidth: 2,
+            tension: 0.25
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          plugins: {
+            legend: {
+              display: true
+            }
+          }
+        }
+      });
+    }
+
+    function atualizarTabela(leituras) {
+      const tabela = document.getElementById('tabelaLeituras');
+
+      if (!leituras || !leituras.length) {
+        tabela.innerHTML = `
+          <tr>
+            <td colspan="4">Nenhuma leitura encontrada.</td>
+          </tr>
+        `;
+        return;
+      }
+
+      tabela.innerHTML = '';
+
+      [...leituras].reverse().forEach(item => {
+        const linha = document.createElement('tr');
+        linha.innerHTML = `
+          <td>${item.id}</td>
+          <td>${Number(item.temperatura).toFixed(2)}</td>
+          <td>${item.luminosidade}</td>
+          <td>${formatarData(item.data_registro)}</td>
+        `;
+        tabela.appendChild(linha);
+      });
+    }
+
+    function atualizarGraficos(leituras) {
+      if (!leituras || !leituras.length) return;
+
+      const labels = leituras.map(item => formatarHora(item.data_registro));
+      const temperaturas = leituras.map(item => Number(item.temperatura));
+      const luminosidades = leituras.map(item => Number(item.luminosidade));
+
+      chartTemp.data.labels = labels;
+      chartTemp.data.datasets[0].data = temperaturas;
+      chartTemp.update();
+
+      chartLum.data.labels = labels;
+      chartLum.data.datasets[0].data = luminosidades;
+      chartLum.update();
+    }
+
+    function atualizarAlertas(alertas) {
+      if (!alertas) return;
+
+      const statusGeral = document.getElementById('statusGeral');
+      aplicarClasseNivel(statusGeral, alertas.geral);
+      statusGeral.textContent = `Status geral: ${alertas.geral.toUpperCase()}`;
+
+      const alertaTemp = document.getElementById('alertaTemperatura');
+      aplicarClasseNivel(alertaTemp, alertas.temperatura.nivel);
+      alertaTemp.innerHTML = `
+        <h3 class="alert-title">${alertas.temperatura.titulo}</h3>
+        <p class="alert-message">${alertas.temperatura.mensagem}</p>
+      `;
+
+      const alertaLum = document.getElementById('alertaLuminosidade');
+      aplicarClasseNivel(alertaLum, alertas.luminosidade.nivel);
+      alertaLum.innerHTML = `
+        <h3 class="alert-title">${alertas.luminosidade.titulo}</h3>
+        <p class="alert-message">${alertas.luminosidade.mensagem}</p>
+      `;
+    }
+
+    function atualizarMetricas(metricas) {
+      if (!metricas) return;
+
+      document.getElementById('temperaturaAtual').textContent =
+        `${Number(metricas.ultimaTemperatura).toFixed(2)} °C`;
+
+      document.getElementById('luminosidadeAtual').textContent =
+        `${metricas.ultimaLuminosidade}`;
+
+      document.getElementById('mediaTemperatura').textContent =
+        `${Number(metricas.mediaTemperatura).toFixed(2)} °C`;
+
+      document.getElementById('mediaLuminosidade').textContent =
+        `${metricas.mediaLuminosidade}`;
+
+      document.getElementById('ultimaAtualizacao').textContent =
+        formatarData(metricas.ultimaAtualizacao);
+    }
+
+    async function carregarDashboard() {
+      const statusConexao = document.getElementById('statusConexao');
+
+      try {
+        statusConexao.textContent = 'Atualizando dados da API...';
+
+        const resposta = await fetch('https://univesp-pi3-v0wv.onrender.com/api/resumo-dashboard');
+        const dados = await resposta.json();
+
+        if (!dados || dados.status !== 'sucesso') {
+          throw new Error('Resposta inválida da API.');
+        }
+
+        if (!dados.metricas) {
+          statusConexao.textContent = 'API conectada, mas ainda não há leituras.';
+          return;
+        }
+
+        atualizarMetricas(dados.metricas);
+        atualizarAlertas(dados.alertas);
+        atualizarGraficos(dados.leituras);
+        atualizarTabela(dados.leituras);
+
+        statusConexao.textContent = 'Dados atualizados com sucesso.';
+      } catch (erro) {
+        console.error('Erro ao carregar dashboard:', erro);
+        statusConexao.textContent = 'Erro ao carregar dados da API.';
+      }
+    }
+
+    criarGraficos();
+    carregarDashboard();
+    setInterval(carregarDashboard, 5000);
+  </script>
+</body>
+</html>
