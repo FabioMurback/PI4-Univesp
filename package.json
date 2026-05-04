@@ -4,6 +4,7 @@
   "description": "",
   "main": "servidor_nuvem.js",
   "scripts": {
+    "start": "node servidor_nuvem.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
