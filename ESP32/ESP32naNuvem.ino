@@ -96,6 +96,9 @@ void iniciarSensores() {
 // =========================
 // ENVIO HTTPS PARA O RENDER
 // =========================
+// Numero maximo de tentativas de envio (cobre o "cold start" do Render free).
+#define MAX_TENTATIVAS_ENVIO 4
+
 bool enviarDados(float temperatura, float umidade, float pressao, float luminosidade) {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("Wi-Fi desconectado. Tentando reconectar...");
@@ -107,22 +110,7 @@ bool enviarDados(float temperatura, float umidade, float pressao, float luminosi
     }
   }
 
-  WiFiClientSecure client;
-  client.setInsecure();  // para testes; em produção prefira validar certificado
-
-  HTTPClient http;
-
-  Serial.print("Conectando à URL: ");
-  Serial.println(apiUrl);
-
-  if (!http.begin(client, apiUrl)) {
-    Serial.println("Falha ao iniciar conexao HTTPS.");
-    return false;
-  }
-
-  http.setTimeout(15000);
-  http.addHeader("Content-Type", "application/json");
-
+  // Monta o JSON uma unica vez.
   String json = "{";
   json += "\"temperatura\":" + String(temperatura, 2) + ",";
   json += "\"umidade\":" + String(umidade, 2) + ",";
@@ -130,33 +118,64 @@ bool enviarDados(float temperatura, float umidade, float pressao, float luminosi
   json += "\"luminosidade\":" + String(luminosidade, 2);
   json += "}";
 
-  Serial.print("JSON enviado: ");
-  Serial.println(json);
+  for (int tentativa = 1; tentativa <= MAX_TENTATIVAS_ENVIO; tentativa++) {
+    WiFiClientSecure client;
+    client.setInsecure();  // para testes; em produção prefira validar certificado
 
-  int codigoHTTP = http.POST(json);
+    HTTPClient http;
 
-  if (codigoHTTP > 0) {
+    Serial.print("Tentativa ");
+    Serial.print(tentativa);
+    Serial.print(" - Conectando à URL: ");
+    Serial.println(apiUrl);
+
+    if (!http.begin(client, apiUrl)) {
+      Serial.println("Falha ao iniciar conexao HTTPS.");
+      delay(3000);
+      continue;
+    }
+
+    http.setTimeout(20000);
+    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);  // segue redirecionamentos
+    http.addHeader("Content-Type", "application/json");
+
+    Serial.print("JSON enviado: ");
+    Serial.println(json);
+
+    int codigoHTTP = http.POST(json);
     String resposta = http.getString();
 
     Serial.print("Codigo HTTP: ");
     Serial.println(codigoHTTP);
-
     Serial.print("Resposta da API: ");
     Serial.println(resposta);
 
-    http.end();
-    return true;
-  } else {
-    Serial.print("Erro no POST HTTPS. Codigo: ");
-    Serial.println(codigoHTTP);
+    // Sucesso somente para respostas 2xx.
+    if (codigoHTTP >= 200 && codigoHTTP < 300) {
+      http.end();
+      return true;
+    }
 
-    String erro = http.errorToString(codigoHTTP);
-    Serial.print("Descricao do erro: ");
-    Serial.println(erro);
+    // 404/502/503 costumam indicar o servico "acordando" (cold start).
+    if (codigoHTTP == 404 || codigoHTTP == 502 || codigoHTTP == 503) {
+      Serial.println("Servico possivelmente inicializando. Aguardando para tentar novamente...");
+    } else if (codigoHTTP <= 0) {
+      Serial.print("Erro de conexao: ");
+      Serial.println(http.errorToString(codigoHTTP));
+    } else {
+      Serial.print("Resposta inesperada da API. Codigo: ");
+      Serial.println(codigoHTTP);
+    }
 
     http.end();
-    return false;
+
+    if (tentativa < MAX_TENTATIVAS_ENVIO) {
+      delay(5000);  // aguarda o servico ficar disponivel
+    }
   }
+
+  Serial.println("Falha ao enviar apos multiplas tentativas.");
+  return false;
 }
 
 // =========================
