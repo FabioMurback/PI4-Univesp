@@ -198,6 +198,38 @@
     }
     .sensor-sugestao strong{ color:var(--muted); }
 
+    /* ---- Tabela de dados capturados ---- */
+    .tabela-card{
+      background:var(--card);
+      border:1px solid var(--border);
+      border-radius:18px;
+      padding:20px;
+      box-shadow:0 6px 20px rgba(0,0,0,0.05);
+      margin-bottom:24px;
+    }
+    .tabela-wrap{
+      overflow-x:auto;
+    }
+    table{
+      width:100%;
+      border-collapse:collapse;
+      min-width:640px;
+    }
+    th, td{
+      padding:12px;
+      border-bottom:1px solid var(--border);
+      text-align:left;
+      font-size:14px;
+      white-space:nowrap;
+    }
+    th{
+      color:var(--muted);
+      font-weight:700;
+    }
+    tbody tr:hover{
+      background:#f8fafc;
+    }
+
     .rodape{
       display:flex;
       justify-content:space-between;
@@ -294,6 +326,30 @@
       </div>
     </div>
 
+    <!-- Dados capturados do ESP32 -->
+    <div class="tabela-card">
+      <h3 class="section-title">Dados capturados do ESP32</h3>
+      <div class="tabela-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Temperatura (°C)</th>
+              <th>Umidade (%)</th>
+              <th>Pressão (hPa)</th>
+              <th>Luminosidade (lux)</th>
+              <th>Data/Hora</th>
+            </tr>
+          </thead>
+          <tbody id="tabelaLeituras">
+            <tr>
+              <td colspan="6">Carregando dados...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
     <div class="rodape">
       <div>Última atualização: <span id="ultimaAtualizacao">--</span></div>
       <div id="statusConexao">Carregando dados da API...</div>
@@ -301,7 +357,7 @@
   </div>
 
   <script>
-    const API_BASE = 'https://univesp-pi3-v0wv.onrender.com';
+    const API_BASE = 'https://pi4-univesp.onrender.com';
 
     const CORES = {
       temperatura: '#ef4444',
@@ -422,6 +478,31 @@
       document.getElementById('sintesePill').textContent = 'Nível: ' + geral.nivel.toUpperCase();
     }
 
+    function atualizarTabela(leituras) {
+      const tabela = document.getElementById('tabelaLeituras');
+
+      if (!leituras || !leituras.length) {
+        tabela.innerHTML = '<tr><td colspan="6">Nenhuma leitura encontrada.</td></tr>';
+        return;
+      }
+
+      tabela.innerHTML = '';
+
+      // Mais recentes primeiro.
+      [...leituras].reverse().forEach(item => {
+        const linha = document.createElement('tr');
+        linha.innerHTML = `
+          <td>${item.id}</td>
+          <td>${Number(item.temperatura).toFixed(1)}</td>
+          <td>${Number(item.umidade).toFixed(1)}</td>
+          <td>${Number(item.pressao).toFixed(1)}</td>
+          <td>${Number(item.luminosidade).toFixed(0)}</td>
+          <td>${formatarData(item.data_registro)}</td>
+        `;
+        tabela.appendChild(linha);
+      });
+    }
+
     function atualizarRodape(metricas) {
       if (!metricas) return;
       document.getElementById('ultimaAtualizacao').textContent =
@@ -449,6 +530,7 @@
         atualizarSintese(dados.geral);
         atualizarClassificacoes(dados.classificacoes);
         atualizarGraficos(dados.leituras);
+        atualizarTabela(dados.leituras);
         atualizarRodape(dados.metricas);
 
         statusConexao.textContent = 'Dados atualizados com sucesso.';
