@@ -51,6 +51,11 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static('public'));
 
+// Raiz redireciona para o dashboard.
+app.get('/', (req, res) => {
+  res.redirect('/leitura.html');
+});
+
 // =========================
 // CONEXÃO COM POSTGRESQL
 // =========================
