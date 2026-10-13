@@ -23,5 +23,11 @@
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "pg": "^8.20.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "optionalDependencies": {
+    "onnxruntime-node": "1.19.2"
   }
 }

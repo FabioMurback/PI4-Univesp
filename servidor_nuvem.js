@@ -1,6 +1,8 @@
 const express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
+const escala = require('./conforto/escala');
+const { obterTextMensal } = require('./conforto/clima');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -42,6 +44,18 @@ const REGRAS = {
     limiteAlerta: 2.5     // > 2,5 hPa (queda ou elevação) -> Atenção
   }
 };
+
+// =========================
+// ESCALA DE CONFORTO TÉRMICO (Relatório Final PJI410, seção 3.2)
+// - Temperatura de conforto adaptativa: Tc = 0,31 · text + 17,8,
+//   com text = média de 30 dias da temperatura externa (Open-Meteo).
+// - Níveis: Desconforto/Atenção – frio, Confortável, Atenção/Desconforto – calor.
+// - Requisitos de operação: correção de aferição do sensor, média móvel
+//   de 10 minutos e histerese de 0,3 °C na troca de nível.
+// =========================
+const OFFSET_TEMPERATURA = parseFloat(process.env.OFFSET_TEMPERATURA || '0'); // correção de aferição do BME280 (°C)
+const JANELA_SUAVIZACAO_MIN = 10;                                             // média móvel (minutos)
+let indiceNivelAnterior = null;                                               // estado para a histerese
 
 // =========================
 // MIDDLEWARES
@@ -86,8 +100,39 @@ async function garantirEsquema() {
       ADD COLUMN IF NOT EXISTS pressao NUMERIC
   `;
 
+  // Colunas da escala de conforto térmico (calculadas a cada gravação).
+  const sqlColunasConforto = `
+    ALTER TABLE pi_leituras_sensores
+      ADD COLUMN IF NOT EXISTS text_mensal NUMERIC,
+      ADD COLUMN IF NOT EXISTS temperatura_conforto NUMERIC,
+      ADD COLUMN IF NOT EXISTS desvio_z NUMERIC,
+      ADD COLUMN IF NOT EXISTS nivel_conforto VARCHAR(24),
+      ADD COLUMN IF NOT EXISTS prob_frio NUMERIC,
+      ADD COLUMN IF NOT EXISTS prob_calor NUMERIC
+  `;
+
+  // Votos de sensação térmica registrados no painel (validação em campo).
+  const sqlVotos = `
+    CREATE TABLE IF NOT EXISTS votos_conforto (
+      id SERIAL PRIMARY KEY,
+      registrado_em TIMESTAMP DEFAULT NOW(),
+      voto SMALLINT NOT NULL CHECK (voto BETWEEN -3 AND 3),
+      preferencia VARCHAR(12) CHECK (preferencia IN ('mais_quente', 'sem_mudanca', 'mais_frio')),
+      leitura_id INTEGER,
+      temperatura NUMERIC,
+      umidade NUMERIC,
+      text_mensal NUMERIC,
+      desvio_z NUMERIC,
+      nivel_exibido VARCHAR(24),
+      prob_frio NUMERIC,
+      prob_calor NUMERIC
+    )
+  `;
+
   await pool.query(sqlTabela);
   await pool.query(sqlColunas);
+  await pool.query(sqlColunasConforto);
+  await pool.query(sqlVotos);
 }
 
 pool.connect()
@@ -96,7 +141,7 @@ pool.connect()
     client.release();
     try {
       await garantirEsquema();
-      console.log('Esquema do banco verificado (4 grandezas disponíveis).');
+      console.log('Esquema do banco verificado (4 grandezas + escala de conforto + votos).');
     } catch (err) {
       console.error('Erro ao garantir esquema do banco:', err.message);
     }
@@ -118,7 +163,7 @@ function classificarTemperatura(valor) {
       nivel: 'critico',
       diagnostico: 'Frio Excessivo',
       impacto: 'Rigidez muscular, queda de destreza motora e desconforto acentuado.',
-      sugestao: 'Acione o aquecedor ou reduza a intensidade da climatização.'
+      sugestao: 'Feche janelas e portas e desligue o ventilador. Se o frio continuar, vista uma camada a mais de roupa.'
     };
   }
   if (valor < cfg.idealMin) {
@@ -126,7 +171,7 @@ function classificarTemperatura(valor) {
       nivel: 'atencao',
       diagnostico: 'Levemente Frio',
       impacto: 'Sensação de frescor excessivo para tarefas estáticas prolongadas.',
-      sugestao: 'Reduza um pouco o ar-condicionado ou use um agasalho leve.'
+      sugestao: 'Feche a janela ou reduza a ventilação.'
     };
   }
   if (valor <= cfg.idealMax) {
@@ -142,15 +187,47 @@ function classificarTemperatura(valor) {
       nivel: 'atencao',
       diagnostico: 'Levemente Quente',
       impacto: 'Início de sonolência e leve sudorese.',
-      sugestao: 'Ligue o ventilador ou o ar-condicionado em modo leve.'
+      sugestao: 'Abra a janela ou ligue o ventilador em velocidade baixa.'
     };
   }
   return {
     nivel: 'critico',
     diagnostico: 'Calor Excessivo',
     impacto: 'Fadiga precoce, estresse térmico e queda de concentração.',
-    sugestao: 'Ligue o ar-condicionado em modo refrigeração imediatamente.'
+    sugestao: 'Mantenha o ar circulando (janela e ventilador) e faça uma pausa. Se houver ar-condicionado, use-o em modo leve.'
   };
+}
+
+// Temperatura avaliada pela escala adaptativa (substitui as faixas fixas
+// quando a temperatura externa média está disponível).
+function classificarTemperaturaEscala(conforto) {
+  return {
+    nivel: conforto.nivelVisual,
+    rotulo: conforto.nivel.toUpperCase(),
+    diagnostico: conforto.nivel,
+    impacto: conforto.frase,
+    sugestao: conforto.recomendacao
+  };
+}
+
+// Média móvel da temperatura nos últimos minutos, com a correção de aferição.
+function temperaturaSuavizada(leituras) {
+  const ultima = leituras[leituras.length - 1];
+  const tFim = new Date(ultima.data_registro).getTime();
+  const janela = leituras.filter((l) => tFim - new Date(l.data_registro).getTime() <= JANELA_SUAVIZACAO_MIN * 60000);
+  const media = janela.reduce((acc, l) => acc + Number(l.temperatura), 0) / janela.length;
+  return { valor: media + OFFSET_TEMPERATURA, leituras: janela.length };
+}
+
+// Calcula a escala para a situação atual (com suavização e histerese).
+async function avaliarConfortoAtual(leituras) {
+  const tm = await obterTextMensal();
+  if (tm.valor === null || tm.valor === undefined) return null;
+  const ts = temperaturaSuavizada(leituras);
+  const conforto = await escala.avaliar(ts.valor, tm.valor, indiceNivelAnterior);
+  indiceNivelAnterior = conforto.indice;
+  return { ...conforto, leiturasNaMedia: ts.leituras, janelaMinutos: JANELA_SUAVIZACAO_MIN,
+    offsetSensor: OFFSET_TEMPERATURA, fonteTextMensal: tm.fonte, diasTextMensal: tm.dias };
 }
 
 function classificarUmidade(valor) {
@@ -316,14 +393,15 @@ function classificarGeral(ctx) {
   const {
     temperatura, umidade, luminosidade,
     evalTemp, evalUmid, evalLux, evalPress,
-    gradientePressao, umidadeSubindo
+    gradientePressao, umidadeSubindo, conforto
   } = ctx;
 
   const avaliacoes = [evalTemp, evalUmid, evalLux, evalPress];
   const criticos = avaliacoes.filter((e) => e.nivel === 'critico');
 
-  const tempAlta = temperatura > REGRAS.temperatura.idealMax;   // acima do ideal
-  const tempBaixa = temperatura < REGRAS.temperatura.idealMin;  // abaixo do ideal
+  // Com a escala: "alta" = Atenção/Desconforto – calor; "baixa" = Atenção/Desconforto – frio.
+  const tempAlta = conforto ? conforto.indice >= 3 : temperatura > REGRAS.temperatura.idealMax;
+  const tempBaixa = conforto ? conforto.indice <= 1 : temperatura < REGRAS.temperatura.idealMin;
   const tempOk = evalTemp.nivel === 'ok';
   const umidOk = evalUmid.nivel === 'ok';
   const umidElevada = umidade > REGRAS.umidade.idealMax;
@@ -334,7 +412,7 @@ function classificarGeral(ctx) {
     return {
       nivel: 'critico',
       titulo: 'Degradação Ambiental Severa',
-      mensagem: 'Ambiente totalmente desajustado. Sugiro ligar o ar-condicionado, acender as luzes e verificar a circulação de ar antes de iniciar as atividades.'
+      mensagem: 'Ambiente totalmente desajustado. Antes de iniciar as atividades, ajuste a ventilação (janela ou ventilador), acenda as luzes e verifique a circulação de ar.'
     };
   }
 
@@ -343,7 +421,7 @@ function classificarGeral(ctx) {
     return {
       nivel: 'critico',
       titulo: 'Ambiente Abafado com Estresse Térmico',
-      mensagem: 'Percebo que o ambiente está quente e abafado. Sugiro ligar o ar-condicionado em modo refrigeração ou desumidificação imediatamente.'
+      mensagem: 'Percebo que o ambiente está quente e abafado. Abra as janelas para renovar o ar e ligue o ventilador. Se houver ar-condicionado, use o modo desumidificação.'
     };
   }
 
@@ -352,7 +430,7 @@ function classificarGeral(ctx) {
     return {
       nivel: 'critico',
       titulo: 'Degradação Ambiental Severa',
-      mensagem: 'Ambiente totalmente desajustado. Sugiro ligar o ar-condicionado, acender as luzes e verificar a circulação de ar antes de iniciar as atividades.'
+      mensagem: 'Ambiente totalmente desajustado. Antes de iniciar as atividades, ajuste a ventilação (janela ou ventilador), acenda as luzes e verifique a circulação de ar.'
     };
   }
 
@@ -370,7 +448,7 @@ function classificarGeral(ctx) {
     return {
       nivel: 'atencao',
       titulo: 'Ambiente Frio e Úmido',
-      mensagem: 'O ambiente está frio para permanência prolongada. Sugiro acionar o aquecedor ou reduzir a intensidade da climatização.'
+      mensagem: 'O ambiente está frio para permanência prolongada. Feche janelas e portas e, se necessário, vista um agasalho.'
     };
   }
 
@@ -428,7 +506,7 @@ function classificarGeral(ctx) {
 // MONTAGEM DO RESUMO COMPLETO
 // Recebe o array de leituras (ordem cronológica crescente).
 // =========================
-function montarResumo(leituras) {
+async function montarResumo(leituras) {
   const ultima = leituras[leituras.length - 1];
 
   const temperatura = Number(ultima.temperatura);
@@ -439,7 +517,8 @@ function montarResumo(leituras) {
   const tendPressao = calcularTendencia(leituras, 'pressao');
   const tendUmidade = calcularTendencia(leituras, 'umidade');
 
-  const evalTemp = classificarTemperatura(temperatura);
+  const conforto = await avaliarConfortoAtual(leituras);
+  const evalTemp = conforto ? classificarTemperaturaEscala(conforto) : classificarTemperatura(temperatura);
   const evalUmid = classificarUmidade(umidade);
   const evalLux = classificarLuminosidade(luminosidade);
   const evalPress = classificarPressao(tendPressao.variacao2h, tendPressao.horas);
@@ -448,7 +527,8 @@ function montarResumo(leituras) {
     temperatura, umidade, luminosidade,
     evalTemp, evalUmid, evalLux, evalPress,
     gradientePressao: tendPressao.variacao2h,
-    umidadeSubindo: tendUmidade.variacao2h > 3
+    umidadeSubindo: tendUmidade.variacao2h > 3,
+    conforto
   });
 
   return {
@@ -463,7 +543,8 @@ function montarResumo(leituras) {
       },
       luminosidade: { ...evalLux, valor: luminosidade, unidade: REGRAS.luminosidade.unidade }
     },
-    geral
+    geral,
+    conforto
   };
 }
 
@@ -526,13 +607,31 @@ app.post('/api/gravar', async (req, res) => {
       });
     }
 
+    // Escala de conforto da leitura individual (sem suavização/histerese),
+    // gravada junto para análises e para a validação em campo.
+    let c = null;
+    try {
+      const tm = await obterTextMensal();
+      if (tm.valor !== null && tm.valor !== undefined) {
+        c = await escala.avaliar(temperaturaNum + OFFSET_TEMPERATURA, tm.valor);
+      }
+    } catch (e) {
+      console.error('Escala não calculada nesta leitura:', e.message);
+    }
+
     const sql = `
-      INSERT INTO pi_leituras_sensores (temperatura, umidade, pressao, luminosidade)
-      VALUES ($1, $2, $3, $4)
-      RETURNING id, temperatura, umidade, pressao, luminosidade, data_registro
+      INSERT INTO pi_leituras_sensores
+        (temperatura, umidade, pressao, luminosidade,
+         text_mensal, temperatura_conforto, desvio_z, nivel_conforto, prob_frio, prob_calor)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      RETURNING id, temperatura, umidade, pressao, luminosidade, data_registro, nivel_conforto
     `;
 
-    const result = await pool.query(sql, [temperaturaNum, umidadeNum, pressaoNum, luminosidadeNum]);
+    const result = await pool.query(sql, [
+      temperaturaNum, umidadeNum, pressaoNum, luminosidadeNum,
+      c ? c.textMensal : null, c ? c.temperaturaConforto : null, c ? c.desvio : null,
+      c ? c.nivel : null, c ? c.probFrio : null, c ? c.probCalor : null
+    ]);
 
     return res.status(200).json({
       status: 'sucesso',
@@ -605,7 +704,7 @@ app.get('/api/status-estudio', async (req, res) => {
     }
 
     const dados = result.rows.slice().reverse();
-    const resumo = montarResumo(dados);
+    const resumo = await montarResumo(dados);
 
     return res.status(200).json({
       status: 'sucesso',
@@ -655,7 +754,7 @@ app.get('/api/resumo-dashboard', async (req, res) => {
     const media = (campo) =>
       dados.reduce((acc, item) => acc + Number(item[campo]), 0) / dados.length;
 
-    const resumo = montarResumo(dados);
+    const resumo = await montarResumo(dados);
 
     return res.status(200).json({
       status: 'sucesso',
@@ -672,7 +771,8 @@ app.get('/api/resumo-dashboard', async (req, res) => {
       },
       leituras: dados,
       classificacoes: resumo.classificacoes,
-      geral: resumo.geral
+      geral: resumo.geral,
+      conforto: resumo.conforto
     });
   } catch (err) {
     console.error('Erro ao montar resumo do dashboard:', err.message);
@@ -685,8 +785,72 @@ app.get('/api/resumo-dashboard', async (req, res) => {
 });
 
 // =========================
+// VOTOS DE SENSAÇÃO TÉRMICA (validação da escala em campo)
+// =========================
+const PREFERENCIAS = ['mais_quente', 'sem_mudanca', 'mais_frio'];
+
+app.post('/api/votos', async (req, res) => {
+  try {
+    const voto = Number(req.body.voto);
+    const preferencia = req.body.preferencia || null;
+    if (!Number.isInteger(voto) || voto < -3 || voto > 3) {
+      return res.status(400).json({ status: 'erro', mensagem: 'O voto deve ser um número inteiro de -3 a +3.' });
+    }
+    if (preferencia !== null && !PREFERENCIAS.includes(preferencia)) {
+      return res.status(400).json({ status: 'erro', mensagem: 'Preferência inválida.' });
+    }
+
+    // Associa o voto à situação exibida no painel naquele momento.
+    const r = await pool.query(`
+      SELECT id, temperatura, umidade, pressao, luminosidade, data_registro
+      FROM pi_leituras_sensores ORDER BY id DESC LIMIT 200`);
+    const dados = r.rows.slice().reverse();
+    const ultima = dados[dados.length - 1] || null;
+    const c = dados.length ? await avaliarConfortoAtual(dados) : null;
+
+    const ins = await pool.query(`
+      INSERT INTO votos_conforto
+        (voto, preferencia, leitura_id, temperatura, umidade, text_mensal, desvio_z, nivel_exibido, prob_frio, prob_calor)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      RETURNING id, registrado_em`, [
+      voto, preferencia, ultima ? ultima.id : null,
+      c ? c.temperaturaInterna : (ultima ? ultima.temperatura : null), ultima ? ultima.umidade : null,
+      c ? c.textMensal : null, c ? c.desvio : null, c ? c.nivel : null, c ? c.probFrio : null, c ? c.probCalor : null
+    ]);
+
+    return res.status(201).json({ status: 'sucesso', mensagem: 'Voto registrado. Obrigado!', voto: ins.rows[0], nivelExibido: c ? c.nivel : null });
+  } catch (err) {
+    console.error('Erro ao registrar voto:', err.message);
+    return res.status(500).json({ status: 'erro', mensagem: 'Erro ao registrar voto.', detalhe: err.message });
+  }
+});
+
+// Resumo dos votos por nível exibido (tabela da validação em campo).
+app.get('/api/votos/resumo', async (req, res) => {
+  try {
+    const r = await pool.query(`
+      SELECT nivel_exibido,
+             COUNT(*)::int AS votos,
+             SUM(CASE WHEN voto >= 2 THEN 1 ELSE 0 END)::int AS calor,
+             SUM(CASE WHEN voto <= -2 THEN 1 ELSE 0 END)::int AS frio,
+             ROUND(AVG(voto)::numeric, 2) AS voto_medio
+      FROM votos_conforto
+      GROUP BY nivel_exibido
+      ORDER BY MIN(desvio_z)`);
+    const total = r.rows.reduce((a, l) => a + l.votos, 0);
+    return res.status(200).json({ status: 'sucesso', total, porNivel: r.rows });
+  } catch (err) {
+    console.error('Erro ao resumir votos:', err.message);
+    return res.status(500).json({ status: 'erro', mensagem: 'Erro ao resumir votos.', detalhe: err.message });
+  }
+});
+
+// =========================
 // INICIALIZAÇÃO
 // =========================
+escala.carregarModelo();
+obterTextMensal().then((tm) => console.log('Temperatura externa média (30 dias):', tm.valor, tm.fonte || tm.erro));
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Servidor rodando na porta ${PORT}`);
 });
