@@ -115,7 +115,8 @@ async function avaliar(ta, textMensal, indiceAnterior = null) {
   const nivel = NIVEIS[indice];
   const p = await probabilidades(ta, textMensal);
   const lado = indice >= 3 ? 'calor' : indice <= 1 ? 'frio' : (p.calor >= p.frio ? 'calor' : 'frio');
-  const pct = Math.round(100 * (lado === 'calor' ? p.calor : p.frio));
+  // Arredonda a partir do mesmo valor exibido no painel (3 casas), para a frase e o cartão coincidirem.
+  const pct = Math.round(100 * +(lado === 'calor' ? p.calor : p.frio).toFixed(3));
   return {
     nivel, indice, nivelVisual: NIVEL_VISUAL[nivel], recomendacao: RECOMENDACAO[nivel],
     temperaturaInterna: +ta.toFixed(2), textMensal: +textMensal.toFixed(2),
